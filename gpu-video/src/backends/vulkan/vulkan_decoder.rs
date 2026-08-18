@@ -12,7 +12,7 @@ use crate::{
         VulkanCommonError, codec::h264::parameters::SeqParameterSetExt as _,
         vulkan_device::DecodingDevice, wrappers::*,
     },
-    decoders::{VideoDecoderBackend, VideoDecoderError},
+    decoders::{DecodedImage, VideoDecoderBackend, VideoDecoderError},
     device::{ColorRange, ColorSpace},
     frame_sorter::{DecodeResult, DecodeResultMetadata},
     parameters::DecoderUsage,
@@ -39,6 +39,13 @@ impl VideoDecoderBackend for VulkanDecoder<'_> {
         decoder_instructions: Vec<DecoderInstruction>,
     ) -> Result<Vec<DecodeResult<RawFrameData>>, VideoDecoderError> {
         VulkanDecoder::decode_to_bytes(self, decoder_instructions).map_err(Into::into)
+    }
+
+    fn decode_to_image(
+        &mut self,
+        decoder_instructions: Vec<DecoderInstruction>,
+    ) -> Result<Vec<DecodeResult<DecodedImage>>, VideoDecoderError> {
+        VulkanDecoder::decode_to_image(self, decoder_instructions).map_err(Into::into)
     }
 }
 
@@ -116,6 +123,20 @@ impl<'a> VulkanDecoder<'a> {
         for instruction in decoder_instructions {
             if let Some(output) = self.decode(instruction)? {
                 result.push(output.output_to_wgpu_texture(wgpu_device)?);
+            }
+        }
+
+        Ok(result)
+    }
+
+    pub(crate) fn decode_to_image(
+        &mut self,
+        decoder_instructions: Vec<DecoderInstruction>,
+    ) -> Result<Vec<DecodeResult<DecodedImage>>, VulkanDecoderError> {
+        let mut result = Vec::new();
+        for instruction in decoder_instructions {
+            if let Some(output) = self.decode(instruction)? {
+                result.push(output.into_decoded_image()?);
             }
         }
 
@@ -1015,6 +1036,17 @@ impl<'a, 'b> DecodeSubmission<'a, 'b> {
         };
 
         self.finish(frame)
+    }
+
+    fn into_decoded_image(self) -> Result<DecodeResult<DecodedImage>, VulkanDecoderError> {
+        let extent = self.decode_result.frame.cropped_extent;
+        let output = DecodedImage {
+            image: self.decode_result.frame.image.image,
+            width: extent.width,
+            height: extent.height,
+        };
+
+        self.finish(output)
     }
 
     #[cfg(feature = "wgpu")]

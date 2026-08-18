@@ -4,7 +4,8 @@ use std::sync::Arc;
 use crate::capabilities::{DecodeCapabilities, EncodeCapabilities};
 use crate::parameters::{EncoderPreset, EncoderUsage, H264Profile, H265Profile, RateControl};
 use crate::{
-    BytesDecoder, BytesEncoderH264, BytesEncoderH265, VideoDecoderError, VideoEncoderError,
+    BytesDecoder, BytesEncoderH264, BytesEncoderH265, RawImageDecoder, VideoDecoderError,
+    VideoEncoderError,
 };
 
 #[cfg(feature = "wgpu")]
@@ -218,6 +219,11 @@ pub(crate) trait CoreVideoDeviceBackend: Send + Sync {
         self: Arc<Self>,
         parameters: DecoderParameters,
     ) -> Result<BytesDecoder, VideoDecoderError>;
+
+    fn create_raw_image_decoder_h264(
+        self: Arc<Self>,
+        parameters: DecoderParameters,
+    ) -> Result<RawImageDecoder, VideoDecoderError>;
 
     fn create_bytes_encoder_h264(
         self: Arc<Self>,

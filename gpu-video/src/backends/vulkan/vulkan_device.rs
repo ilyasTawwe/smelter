@@ -24,8 +24,8 @@ use crate::parameters::EncoderPreset;
 use crate::parser::h264::H264Parser;
 use crate::parser::reference_manager::ReferenceContext;
 use crate::{
-    BytesDecoder, BytesEncoderH264, BytesEncoderH265, RawFrameData, VideoBackendError,
-    VideoDecoderError, VideoDeviceInitError, VideoEncoderError,
+    BytesDecoder, BytesEncoderH264, BytesEncoderH265, RawFrameData, RawImageDecoder,
+    VideoBackendError, VideoDecoderError, VideoDeviceInitError, VideoEncoderError,
 };
 
 use self::caps::{
@@ -55,6 +55,13 @@ impl CoreVideoDeviceBackend for VulkanDevice {
         parameters: DecoderParameters,
     ) -> Result<BytesDecoder, VideoDecoderError> {
         VulkanDevice::create_bytes_decoder_h264(self, parameters).map_err(Into::into)
+    }
+
+    fn create_raw_image_decoder_h264(
+        self: Arc<Self>,
+        parameters: DecoderParameters,
+    ) -> Result<RawImageDecoder, VideoDecoderError> {
+        VulkanDevice::create_raw_image_decoder_h264(self, parameters).map_err(Into::into)
     }
 
     fn create_bytes_encoder_h264(
@@ -255,6 +262,32 @@ impl VulkanDevice {
         let frame_sorter = FrameSorter::<RawFrameData>::new();
 
         Ok(BytesDecoder {
+            parser,
+            reference_ctx,
+            decoder: Box::new(vulkan_decoder),
+            frame_sorter,
+        })
+    }
+
+    pub fn create_raw_image_decoder_h264(
+        self: Arc<Self>,
+        parameters: DecoderParameters,
+    ) -> Result<RawImageDecoder, VulkanDecoderError> {
+        let parser = H264Parser::default();
+        let reference_ctx = ReferenceContext::new(parameters.missed_frame_handling);
+
+        let vulkan_decoder = VulkanDecoder::new(
+            Arc::new(self.decoding_device()?),
+            parameters.usage_flags,
+            ImageModifiers {
+                additional_queue_index: self.queues.transfer.family_index,
+                create_flags: Default::default(),
+                usage_flags: Default::default(),
+            },
+        )?;
+        let frame_sorter = FrameSorter::new();
+
+        Ok(RawImageDecoder {
             parser,
             reference_ctx,
             decoder: Box::new(vulkan_decoder),

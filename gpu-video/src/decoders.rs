@@ -1,3 +1,5 @@
+use ash::vk;
+
 use crate::{
     DecoderEvent, EncodedInputChunk, H264ParserError, OutputFrame, RawFrameData,
     ReferenceManagementError, VideoBackendError,
@@ -19,6 +21,24 @@ pub(crate) trait VideoDecoderBackend: Send {
         &mut self,
         decoder_instructions: Vec<DecoderInstruction>,
     ) -> Result<Vec<DecodeResult<RawFrameData>>, VideoDecoderError>;
+
+    fn decode_to_image(
+        &mut self,
+        decoder_instructions: Vec<DecoderInstruction>,
+    ) -> Result<Vec<DecodeResult<DecodedImage>>, VideoDecoderError>;
+}
+
+/// A decoded video frame as a raw Vulkan image.
+///
+/// The image is in NV12 format ([`vk::Format::G8_B8R8_2PLANE_420_UNORM`]) and its
+/// layout after decode is [`vk::ImageLayout::TRANSFER_SRC_OPTIMAL`].
+///
+/// The image lives in gpu-video's internal VkDevice memory. It is valid for the
+/// lifetime of this struct.
+pub struct DecodedImage {
+    pub image: vk::Image,
+    pub width: u32,
+    pub height: u32,
 }
 
 /// A decoder that outputs frames stored as [`Vec<u8>`] with the raw pixel data.
@@ -83,6 +103,70 @@ impl BytesDecoder {
     ) -> Result<Vec<OutputFrame<RawFrameData>>, VideoDecoderError> {
         let instructions = compile_to_decoder_instructions(&mut self.reference_ctx, access_units)?;
         let unsorted_frames = self.decoder.decode_to_bytes(instructions)?;
+        let sorted_frames = self.frame_sorter.put_frames(unsorted_frames);
+        Ok(sorted_frames)
+    }
+}
+
+/// A decoder that outputs decoded frames as raw Vulkan [`vk::Image`] handles.
+///
+/// The returned images are in NV12 format ([`vk::Format::G8_B8R8_2PLANE_420_UNORM`])
+/// and live in gpu-video's internal VkDevice memory.
+pub struct RawImageDecoder {
+    pub(crate) decoder: Box<dyn VideoDecoderBackend>,
+    pub(crate) parser: H264Parser,
+    pub(crate) reference_ctx: ReferenceContext,
+    pub(crate) frame_sorter: FrameSorter<DecodedImage>,
+}
+
+impl RawImageDecoder {
+    /// Decode a chunk of H.264 encoded data.
+    pub fn decode(
+        &mut self,
+        frame: EncodedInputChunk<'_>,
+    ) -> Result<Vec<OutputFrame<DecodedImage>>, VideoDecoderError> {
+        self.process_event(DecoderEvent::DecodeChunk(frame))
+    }
+
+    /// Flush all frames from the decoder.
+    pub fn flush(&mut self) -> Result<Vec<OutputFrame<DecodedImage>>, VideoDecoderError> {
+        self.process_event(DecoderEvent::Flush)
+    }
+
+    /// Process a [`DecoderEvent`].
+    pub fn process_event(
+        &mut self,
+        event: DecoderEvent<'_, AccessUnit>,
+    ) -> Result<Vec<OutputFrame<DecodedImage>>, VideoDecoderError> {
+        match event {
+            DecoderEvent::DecodeChunk(chunk) => {
+                let nalus = self.parser.parse(chunk.data, chunk.pts)?;
+                self.decode_access_units(nalus)
+            }
+            DecoderEvent::DecodeParsedFrame(au) => self.decode_access_units(vec![au]),
+            DecoderEvent::SignalFrameEnd => {
+                let access_units = self.parser.flush()?;
+                self.decode_access_units(access_units)
+            }
+            DecoderEvent::SignalDataLoss => {
+                self.reference_ctx.mark_missed_frames();
+                Ok(Vec::new())
+            }
+            DecoderEvent::Flush => {
+                let access_units = self.parser.flush()?;
+                let mut frames = self.decode_access_units(access_units)?;
+                frames.append(&mut self.frame_sorter.flush());
+                Ok(frames)
+            }
+        }
+    }
+
+    fn decode_access_units(
+        &mut self,
+        access_units: Vec<AccessUnit>,
+    ) -> Result<Vec<OutputFrame<DecodedImage>>, VideoDecoderError> {
+        let instructions = compile_to_decoder_instructions(&mut self.reference_ctx, access_units)?;
+        let unsorted_frames = self.decoder.decode_to_image(instructions)?;
         let sorted_frames = self.frame_sorter.put_frames(unsorted_frames);
         Ok(sorted_frames)
     }

@@ -131,7 +131,7 @@ pub use crate::{
 pub use crate::adapter::VideoAdapter;
 #[cfg(feature = "wgpu")]
 pub use crate::decoders::WgpuTexturesDecoder;
-pub use crate::decoders::{BytesDecoder, VideoDecoderError};
+pub use crate::decoders::{BytesDecoder, DecodedImage, RawImageDecoder, VideoDecoderError};
 pub use crate::encoders::{BytesEncoderH264, BytesEncoderH265, VideoEncoderError};
 #[cfg(feature = "wgpu")]
 pub use crate::encoders::{WgpuTexturesEncoderH264, WgpuTexturesEncoderH265};
@@ -187,6 +187,13 @@ impl VideoDevice {
         parameters: DecoderParameters,
     ) -> Result<BytesDecoder, VideoDecoderError> {
         self.inner.clone().create_bytes_decoder_h264(parameters)
+    }
+
+    pub fn create_raw_image_decoder_h264(
+        &self,
+        parameters: DecoderParameters,
+    ) -> Result<RawImageDecoder, VideoDecoderError> {
+        self.inner.clone().create_raw_image_decoder_h264(parameters)
     }
 
     #[cfg(feature = "wgpu")]
